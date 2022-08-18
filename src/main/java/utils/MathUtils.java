@@ -2,7 +2,7 @@ package utils;
 
 import java.util.Random;
 
-import Models.Position;
+import Models.GameState.Position;
 
 public class MathUtils {
     public static double calculateDistanceBetweenPoints(

@@ -1,18 +1,15 @@
 
-import Models.*;
-import Models.Dtos.*;
+import Models.CommandAction.PlayerCommand;
+import Models.EngineConfig.EngineConfig;
+import Models.GameState.GameState;
 import Services.*;
 import com.microsoft.signalr.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 import java.util.*;
 
 public class Main {
-
     public static void main(String[] args) throws Exception {
-        Logger logger = LoggerFactory.getLogger(Main.class);
         BotService botService = new BotService();
         String token = System.getenv("Token");
 
@@ -24,70 +21,39 @@ public class Main {
         ip = ip.startsWith("http://") ? ip : "http://" + ip;
 
         String url = ip + ":" + "5000" + "/runnerhub";
-        // create the connection
-        HubConnection hubConnection = HubConnectionBuilder.create(url)
-                .build();
+        HubConnection hubConnection = HubConnectionBuilder.create(url).build();
 
         hubConnection.on("Disconnect", (id) -> {
             System.out.println("Disconnected:");
-            botService.setShouldQuite(true);
+            botService.setShouldQuit(true);
             hubConnection.stop();
         }, UUID.class);
 
-        hubConnection.on("Registered", (id) -> {
-            System.out.println("Registered with the runner, bot ID is: " + id);
+        hubConnection.on("Registered", (id) -> System.out.println("Registered with the runner, bot ID is: " + id), UUID.class);
 
-            BotDto bot = new BotDto(id);
-            botService.setBot(bot);
+        hubConnection.on("ReceiveBotState", botService::updateBotState, GameState.class);
 
-        }, UUID.class);
-
-        hubConnection.on("ReceiveBotState", (gameStateDto) -> {
-
-            botService.setReceivedBotState(true);
-            botService.updateBotState(gameStateDto);
-        }, GameStateDto.class);
-
-        hubConnection.on("ReceiveConfigValues", (engineConfig) -> {
-
-            botService.setEngineConfig(engineConfig);
-            System.out.println(botService.getEngineConfig().worldLength);
-        }, EngineConfigDto.class);
-
+        hubConnection.on("ReceiveConfigValues", botService::setEngineConfig, EngineConfig.class);
 
         hubConnection.start().blockingAwait();
 
         Thread.sleep(1000);
         System.out.println("Registering with the runner...");
-        hubConnection.send("Register", token, "Coffee :) Bot");
+        hubConnection.send("Register", token, "RobotSquid");
 
-        hubConnection.on("ReceiveGameComplete", (state) -> {
-            System.out.println("Game complete");
+        hubConnection.on("ReceiveGameComplete", (state) -> System.out.println("Game complete"), String.class);
 
-        }, String.class);
-
-
-        //This is a blocking call
         hubConnection.start().subscribe(()-> {
-
-            while (!botService.getShouldQuite()) {
+            while (!botService.getShouldQuit()) {
                 Thread.sleep(20);
-
-                    if (botService.getReceivedBotState()) {
-                       PlayerCommand playerCommand = botService.computeNextPlayerAction();
-
-                       if (hubConnection.getConnectionState() == HubConnectionState.CONNECTED && playerCommand != null) {
-                           hubConnection.send("SendPlayerCommand", playerCommand);
-                           System.out.println("sending a command");
-                       }
-                       botService.setReceivedBotState(false);
-                     //   System.out.println("Not sending any action for Bot ID: " + botService.getBot().getId());
-                    // System.out.println("Map: " + botService.getGameState().getWorld().getMap());
-                    }
+                if (botService.getReceivedBotState()) {
+                   PlayerCommand playerCommand = botService.computeNextPlayerAction();
+                   if (hubConnection.getConnectionState() == HubConnectionState.CONNECTED && playerCommand != null) {
+                       hubConnection.send("SendPlayerCommand", playerCommand);
+                   }
+                }
             }
         });
-
         hubConnection.stop();
-
     }
 }

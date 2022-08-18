@@ -73,5 +73,6 @@
             <artifactId>slf4j-simple</artifactId>
             <version>${slf4jVersion}</version>
         </dependency>
+
     </dependencies>
 </project>

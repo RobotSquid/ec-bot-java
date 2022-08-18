@@ -1,17 +1,19 @@
 package Enums;
 
 public enum ResourceType {
-    ERROR(0),
-    WOOD(1),
-    FOOD(2),
-    STONE(3),
-    GOLD(4),
-    HEAT(5);
+    ERROR(0, ActionTypes.ERROR),
+    WOOD(1, ActionTypes.LUMBER),
+    FOOD(2, ActionTypes.FARM),
+    STONE(3, ActionTypes.MINE),
+    GOLD(4, ActionTypes.MINE),
+    HEAT(5, ActionTypes.START_CAMPFIRE);
 
     public final int value;
-    private ResourceType(int value)
+    public final ActionTypes actionType;
+    private ResourceType(int value, ActionTypes actionType)
     {
         this.value = value;
+        this.actionType = actionType;
     }
 
     public int getValue() {
