@@ -1,5 +1,7 @@
 package Models.GameState;
 
+import Enums.ResourceType;
+
 public class StatusMultiplier {
     int woodReward;
     int foodReward;
@@ -13,6 +15,23 @@ public class StatusMultiplier {
         this.stoneReward = stoneReward;
         this.goldReward = goldReward;
         this.heatReward = heatReward;
+    }
+
+    public int get(ResourceType type) {
+        switch (type) {
+            case WOOD:
+                return woodReward;
+            case FOOD:
+                return foodReward;
+            case STONE:
+                return stoneReward;
+            case GOLD:
+                return goldReward;
+            case HEAT:
+                return heatReward;
+            default:
+                return 0;
+        }
     }
 
     public int getWoodReward() {

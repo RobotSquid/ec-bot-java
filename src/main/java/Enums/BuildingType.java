@@ -1,24 +1,24 @@
 package Enums;
 
 public enum BuildingType {
-    ERROR(0, 0, 0, 0),
-    BASE(1, 0, 0, 0),
-    QUARRY(6, 90, 90, 45),
-    FARMERS_GUILD(7, 50, 50, 25),
-    LUMBER_MILL(8, 40, 40, 15),
-    OUTPOST(9, 220, 220, 110),
-    ROAD(10, 50, 50, 35);
+    ERROR(0, new int[] {0, 0, 0}, 0, 0),
+    BASE(1, new int[] {0, 0, 0}, 0, 3),
+    QUARRY(6, new int[] {90, 90, 45}, 6, 2),
+    FARMERS_GUILD(7, new int[] {50, 50, 25}, 4, 2),
+    LUMBER_MILL(8, new int[] {40, 40, 15}, 2, 1),
+    OUTPOST(9, new int[] {220, 220, 110}, 0, 3),
+    ROAD(10, new int[] {50, 50, 35}, 0, 1);
 
     public final int value;
-    public final int wood;
-    public final int stone;
-    public final int gold;
+    public final int[] cost;
+    public final int scoreMultiplier;
+    public final int territorySquare;
 
-    BuildingType(int value, int wood, int stone, int gold) {
+    BuildingType(int value, int[] cost, int scoreMultiplier, int territorySquare) {
         this.value = value;
-        this.wood = wood;
-        this.stone = stone;
-        this.gold = gold;
+        this.cost = cost;
+        this.scoreMultiplier = scoreMultiplier;
+        this.territorySquare = territorySquare;
     }
 
     public static BuildingType valueOf(Integer value) {
