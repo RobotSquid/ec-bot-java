@@ -154,22 +154,22 @@ public class BotService {
         int[] currentQty = {0, bot.getWood(), bot.getFood(), bot.getStone(), bot.getGold(), bot.getHeat()};
         TierResourceList maxQty = gameState.getPopulationTiers().get(bot.getCurrentTierLevel()).getTierMaxResources();
         int[] tierMax = {0, maxQty.getWood(), maxQty.getFood(), maxQty.getStone(), maxQty.getGold(), 1000000};
-        double idealFarm = getInvResourceEfficiency(ResourceType.FOOD.value)*Math.max(pop/8.0, (3.0*pop-bot.getFood())/(20-gameState.getWorld().getCurrentTick()%10));
-        double idealFire = getInvResourceEfficiency(ResourceType.HEAT.value)*Math.max(bot.getHeat() > 10*pop ? 0 : pop/8.0, (3.0*pop-bot.getHeat())/(20-gameState.getWorld().getCurrentTick()%10));
+        double idealFarm = getInvResourceEfficiency(ResourceType.FOOD.value)*(0.15/((double)bot.getFood()/pop+0.375)+0.1)*pop;
+        double idealFire = getInvResourceEfficiency(ResourceType.HEAT.value)*(bot.getHeat() > 150*pop ? 0 : (0.15/((double)bot.getFood()/pop+0.375)+0.1)*pop);
         double idealWood = getInvResourceEfficiency(ResourceType.WOOD.value)*3*idealFire;
         int totalFarmers = botActions[0]+botActions[ActionTypes.FARM.value]+botActions[ActionTypes.MINE.value]+botActions[ActionTypes.LUMBER.value];
-        double ksub = (0.16667*getInvResourceEfficiency(ResourceType.FOOD.value)
-                +0.33333*getInvResourceEfficiency(ResourceType.WOOD.value)
-                +0.33333*getInvResourceEfficiency(ResourceType.STONE.value)
-                +0.13667*getInvResourceEfficiency(ResourceType.GOLD.value));
+        double ksub = (0.1*getInvResourceEfficiency(ResourceType.FOOD.value)
+                +0.35*getInvResourceEfficiency(ResourceType.WOOD.value)
+                +0.35*getInvResourceEfficiency(ResourceType.STONE.value)
+                +0.2*getInvResourceEfficiency(ResourceType.GOLD.value));
         double k = ksub == 0 ? 0 : (totalFarmers-idealFarm-idealFire-idealWood)/ksub;
-        idealFarm += getInvResourceEfficiency(ResourceType.FOOD.value)*0.16667*k;
-        idealWood += getInvResourceEfficiency(ResourceType.WOOD.value)*0.33333*k;
-        double idealStone = getInvResourceEfficiency(ResourceType.STONE.value)*0.33333*k;
-        double idealGold = getInvResourceEfficiency(ResourceType.GOLD.value)*0.16667*k;
-        idealWood = Math.min(idealWood, getInvResourceEfficiency(ResourceType.WOOD.value)*(tierMax[ResourceType.WOOD.value]-currentQty[ResourceType.WOOD.value]));
-        idealStone = Math.min(idealStone, getInvResourceEfficiency(ResourceType.STONE.value)*2*(tierMax[ResourceType.STONE.value]-currentQty[ResourceType.STONE.value]));
-        idealGold = Math.min(idealGold, getInvResourceEfficiency(ResourceType.GOLD.value)*2*(tierMax[ResourceType.GOLD.value]-currentQty[ResourceType.GOLD.value]));
+        idealFarm += getInvResourceEfficiency(ResourceType.FOOD.value)*0.1*k;
+        idealWood += getInvResourceEfficiency(ResourceType.WOOD.value)*0.35*k;
+        double idealStone = getInvResourceEfficiency(ResourceType.STONE.value)*0.4*k;
+        double idealGold = getInvResourceEfficiency(ResourceType.GOLD.value)*0.2*k;
+        idealWood = Math.min(idealWood, getInvResourceEfficiency(ResourceType.WOOD.value)*2*Math.max(0, tierMax[ResourceType.WOOD.value]-currentQty[ResourceType.WOOD.value]));
+        idealStone = Math.min(idealStone, getInvResourceEfficiency(ResourceType.STONE.value)*2*Math.max(0, tierMax[ResourceType.STONE.value]-currentQty[ResourceType.STONE.value]));
+        idealGold = Math.min(idealGold, getInvResourceEfficiency(ResourceType.GOLD.value)*2*Math.max(0, tierMax[ResourceType.GOLD.value]-currentQty[ResourceType.GOLD.value]));
         double[] idealUnits = {0, idealWood, idealFarm, idealStone, idealGold, idealFire};
         System.out.printf("IDEAL UNITS: %s%n", Arrays.toString(idealUnits));
         for (int i = 1; i <= 5; i++) {
