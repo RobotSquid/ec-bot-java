@@ -17,30 +17,45 @@ public class BotService {
     BotObject bot;
     GameState gameState;
     List<CommandAction> commandList = new ArrayList<>();
+    // node object from UUID
     HashMap<UUID, ResourceNode> nodeMap = new HashMap<>();
     HashMap<UUID, GenericNode> availableNodeMap = new HashMap<>();
+    // owner from node UUID
     HashMap<UUID, UUID> territoryOwner = new HashMap<>();
-    GenericNode nextDestinationNode;
-    Set<ResourceNode> capturedNodes = new HashSet<>();
+    // amount of buildings of type
     int[] existingBuilding = new int[20];
+    // amount of units of action type
     int[] botActions = new int[20];
+    // is the full map scouted?
     boolean fullView = false;
+    // node object from position
     ResourceNode[][] resourceMap = new ResourceNode[40][40];
     int[][] distanceMap = new int[40][40];
+    Position[][] parentMap = new Position[40][40];
     int[] prevResources = new int[5];
     double[] prevScorePerTick = new double[5];
-    double[] prevAvgPerTick = new double[5];
+    double[] prevAvgPerTick = {0, 1, 1, 0, 0, 1};
+    // actions for a node with uuid
     HashMap<UUID, List<PlayerAction>> nodeActions = new HashMap<>();
+    // my actions for a node with uuid
     HashMap<UUID, List<PlayerAction>> myActions = new HashMap<>();
     Set<BotTerritory> borderNodes = new HashSet<>();
     UUID[][] territoryMap = new UUID[40][40];
     HashMap<UUID, Integer> unitsToCaptureMemo = new HashMap<>();
-    int BAD_UNITS = 0;
     int[] resourceAllocations = {0, 0, 0, 0, 0, 0};
     double[] idealResources = {0, 0, 0, 0, 0, 0};
     int[] currentQty;
     int[][] freeNodes = new int[40][40];
     double averageK = 0;
+    HashMap<UUID, Double> resNodeScoreMemo = new HashMap<>();
+    UUID[][] startingNodes = new UUID[40][40];
+    BotTerritory[][] territoryObjMap = new BotTerritory[40][40];
+    HashMap<BotTerritory, Boolean> startingSet = new HashMap<>();
+    double[] avgDist = {0, 0, 0, 0, 0, 0};
+    HashSet<UUID> currentlyBuilding = new HashSet<>();
+    HashSet<UUID> currentlyOccupying = new HashSet<>();
+    int unitsOccupying = 0;
+    int occupyingBuffer = 0;
 
     int commandCount = 2;
     Random random = new Random();
@@ -204,7 +219,6 @@ public class BotService {
         idealResources[ResourceType.FOOD.value] = getResourceEfficiency(ResourceType.FOOD.value, true)*(0.6*pop/((double)bot.getFood()/pop+1.0));
         idealResources[ResourceType.HEAT.value] = getResourceEfficiency(ResourceType.HEAT.value, true)*(0.6*pop/((double)bot.getHeat()/pop+1.0));
         idealResources[ResourceType.WOOD.value] = getResourceEfficiency(ResourceType.WOOD.value, true)*(0.6667*0.6*pop/((double)bot.getHeat()/pop+1.0));
-        System.out.printf("INV_EFF FOOD: %6.2f, WOOD: %6.2f%n", getResourceEfficiency(ResourceType.FOOD.value, true), getResourceEfficiency(ResourceType.WOOD.value, true));
         updateAllocations((int)Math.ceil(Arrays.stream(idealResources).sum()));
 
         if (bot.getCurrentTierLevel() >= 6) {
@@ -228,7 +242,7 @@ public class BotService {
         updateAllocations((int)(0.2*botActions[0]));
 
         int totalWood = gameState.getWorld().getMap().getNodes().stream().filter(n -> n.getType() == ResourceType.WOOD.value).mapToInt(ResourceNode::getAmount).sum();
-        double woodFactor = Math.max(0, gameState.getWorld().getCurrentTick() > 200 ? 1-totalWood/5000000.0 : 0)*20;
+        double woodFactor = Math.max(0, gameState.getWorld().getCurrentTick() > 200 ? 1-totalWood/6000000.0 : 0)*25;
         unitWeights = new double[] {0, 1+.66667*woodFactor, 1, 1.4, 1, woodFactor};
         idealResources = new double[] {0, 0, 0, 0, 0, 0};
         k = 0;
@@ -261,11 +275,10 @@ public class BotService {
                 botActions[0] -= amount; botActions[ResourceType.valueOf(i).actionType.value] += amount;
                 prevScorePerTick[i] += getScorePerTick(node, true)*amount;
             }
-            if (origResAlloc > resourceAllocations[i]) {
-                prevScorePerTick[i] /= origResAlloc - resourceAllocations[i];
-                prevAvgPerTick[i] -= prevAvgPerTick[i] / 50;
-                prevAvgPerTick[i] += prevScorePerTick[i] / 50;
-            }
+            if (origResAlloc > resourceAllocations[i]) prevScorePerTick[i] /= origResAlloc - resourceAllocations[i];
+            else prevScorePerTick[i] = 0;
+            prevAvgPerTick[i] -= prevAvgPerTick[i] / Math.min(50, gameState.getWorld().getCurrentTick());
+            prevAvgPerTick[i] += prevScorePerTick[i] / Math.min(50, gameState.getWorld().getCurrentTick());
         }
         if (resourceAllocations[5] > 0) {
             commandList.add(new CommandAction(ActionTypes.START_CAMPFIRE.value, resourceAllocations[5], UUID.randomUUID()));
@@ -280,47 +293,45 @@ public class BotService {
         return Arrays.stream(BuildingType.valueOf(buildingType).cost).map(i -> (int)Math.ceil((1+0.5*existingBuilding[buildingType])*i)).toArray();
     }
 
-    private void build(boolean expand) {
+    private UUID trackToTerritory(ResourceNode node) {
+        Position pos = node.getPosition();
+        while (parentMap[pos.x][pos.y] != null) pos = parentMap[pos.x][pos.y];
+        return startingNodes[pos.x][pos.y];
+    }
+
+    private void build() {
         if (botActions[0] < 1) return;
         int[] toBuild;
-        if (!expand) toBuild = new int[] {BuildingType.QUARRY.value, BuildingType.FARMERS_GUILD.value, BuildingType.LUMBER_MILL.value};
-        else toBuild = new int[] {BuildingType.ROAD.value, BuildingType.OUTPOST.value};
-        int k = Arrays.stream(toBuild).reduce((a, b) -> getBuildingCost(a)[1] < getBuildingCost(b)[1] ? a : b).getAsInt();
-        int[] cost = getBuildingCost(k);
-        if (cost[0] > bot.getWood() || cost[1] > bot.getStone() || cost[2] > bot.getGold()) return;
-        nextDestinationNode = recalculateDestinationNode();
-        GenericNode closestNode = nextExpansionNode(nextDestinationNode, BuildingType.valueOf(k));
-        //if (closestNode == null) closestNode = nextBlobNode();
-        if (closestNode == null) return;
+        List<GenericNode> nodes = gameState.getWorld().getMap().getNodes().stream()
+                .filter(node -> !(territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId())))
+                .sorted(Comparator.comparingDouble(node -> -resNodeScoreMemo.get(node.getId())))
+                .map(node -> availableNodeMap.get(trackToTerritory(node)))
+                .filter(node -> node != null && !currentlyBuilding.contains(node.getId()) && territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId()))
+                .limit(1).collect(Collectors.toList());
 
-        commandList.add(new CommandAction(k, 1, closestNode.getId()));
-        botActions[0]--; botActions[k]++;
-        //System.out.printf("Building %s at %s%n", k, closestNode.getId());
-        bot.setWood(bot.getWood()-cost[0]);
-        bot.setStone(bot.getStone()-cost[1]);
-        bot.setGold(bot.getGold()-cost[2]);
+        System.out.printf("EFF:  WOOD %6.2f, FARM %6.2f, STONE %6.2f, GOLD %6.2f, FIRE %6.2f\n", getResourceEfficiency(ResourceType.WOOD.value, false), getResourceEfficiency(ResourceType.FOOD.value, false), getResourceEfficiency(ResourceType.STONE.value, false), getResourceEfficiency(ResourceType.GOLD.value, false), getResourceEfficiency(ResourceType.HEAT.value, false));
+
+        for (GenericNode node : nodes) {
+            if (!expensiveMultiplierBuildings()) toBuild = new int[] {BuildingType.QUARRY.value, BuildingType.FARMERS_GUILD.value, BuildingType.LUMBER_MILL.value};
+            else toBuild = new int[] {BuildingType.ROAD.value, BuildingType.OUTPOST.value};
+            int k = Arrays.stream(toBuild).reduce((a, b) -> getBuildingCost(a)[1] < getBuildingCost(b)[1] ? a : b).getAsInt();
+            int[] cost = getBuildingCost(k);
+            if (cost[0] > bot.getWood() || cost[1] > bot.getStone() || cost[2] > bot.getGold()) return;
+
+            commandList.add(new CommandAction(k, 1, node.getId()));
+            botActions[0]--;
+            botActions[k]++;
+            existingBuilding[k]++;
+
+            bot.setWood(bot.getWood() - cost[0]);
+            bot.setStone(bot.getStone() - cost[1]);
+            bot.setGold(bot.getGold() - cost[2]);
+        }
     }
 
-    private ResourceNode recalculateDestinationNode() {
-        if (!fullView) return null;
-        int stone = (int) capturedNodes.stream().filter(node -> node.getType() == ResourceType.STONE.value).count();
-        int gold = (int) capturedNodes.stream().filter(node -> node.getType() == ResourceType.GOLD.value).count();
-        int type = stone < gold ? ResourceType.STONE.value : ResourceType.GOLD.value;
-        return gameState.getWorld().getMap().getNodes().stream()
-                .filter(node -> (territoryOwner.get(node.getId()) == null || territoryOwner.get(node.getId()).equals(bot.getId()))
-                        && (node.getType() == type)
-                        && !capturedNodes.contains(node))
-                .max(Comparator.comparingDouble(a -> getScorePerTick(a, false)/(distanceMap[a.getPosition().x][a.getPosition().y]+15)))
-                .orElse(null);
-    }
-
-    private int heuristicDistance(Position node, GenericNode destination, int size) {
-        return (int)Math.ceil(Math.max(Math.abs(node.x-destination.getPosition().x), Math.abs(node.y-destination.getPosition().y))/(double)size);
-    }
-
-    private List<Position> getNeighbours(Position node, int size) {
+    private List<Position> getNeighbours(Position node) {
         List<Position> neighbours = new ArrayList<>();
-        for (int i = -size; i <= size; i++) for (int j = -size; j <= size; j++) {
+        for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
             if (i == 0 && j == 0) continue;
             if (node.x+i < 0 || node.x+i >= 40 || node.y+j < 0 || node.y+j >= 40) continue;
             neighbours.add(new Position(node.x+i, node.y+j));
@@ -328,51 +339,23 @@ public class BotService {
         return neighbours;
     }
 
-    private GenericNode nextBlobNode() {
-        return gameState.getWorld().getMap().getAvailableNodes().stream()
-                .filter(node -> territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId()))
-                .max(Comparator.comparingDouble(node -> (double)(freeNodes[node.getPosition().x][node.getPosition().y]+1)/getBaseDistance(node.getPosition())))
-                .orElse(null);
-    }
-
-    private GenericNode nextExpansionNode(GenericNode destination, BuildingType startBuilding) {
-        if (nextDestinationNode == null) return null;
-        boolean[][] occupied = new boolean[40][40];
-        boolean[][] visited = new boolean[40][40];
-        PriorityQueue<PathElement> queue = new PriorityQueue<>(Comparator.comparingDouble(a -> a.depth+heuristicDistance(a.node, destination, startBuilding.territorySquare)));
-        gameState.getWorld().getMap().getNodes().forEach(node -> occupied[node.getPosition().x][node.getPosition().y] = true);
-        gameState.getWorld().getMap().getScoutTowers().forEach(node -> occupied[node.getPosition().x][node.getPosition().y] = true);
-        gameState.getWorld().getMap().getAvailableNodes()
-                .forEach(node -> {
-                    if (territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId())) {
-                        visited[node.getPosition().getX()][node.getPosition().getY()] = true;
-                        queue.add(new PathElement(node, node.getPosition(), 1));
-                    }
-                });
-        gameState.getBots().forEach(b -> b.getTerritory().stream()
-                .filter(node -> !node.getOwner().equals(bot.getId()))
-                .forEach(node -> occupied[node.getX()][node.getY()] = true));
-        while (!queue.isEmpty()) {
-            PathElement element = queue.poll();
-            if (getDistance(element.node, destination.getPosition()) < 2) return element.firstNode;
-            for (Position node : getNeighbours(element.node, startBuilding.territorySquare)) {
-                if (visited[node.getX()][node.getY()] || occupied[node.getX()][node.getY()]) continue;
-                visited[node.getX()][node.getY()] = true;
-                queue.add(new PathElement(element.firstNode, node, element.depth + 1));
-            }
-        }
-        return null;
+    private double getNodeCompScore(ResourceNode node) {
+        if (territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId())) return 0;
+        double scoreMultiplier = bot.getStatusMultiplier().get(ResourceType.valueOf(node.getType()))+1;
+        double extraResources = Math.max(0, getScorePerTick(node, false)*scoreMultiplier/(prevAvgPerTick[node.getType()]+0.01)-1)
+                * ((botActions[ResourceType.valueOf(node.getType()).actionType.value]+10.0)/bot.getPopulation());
+        double distance = distanceMap[node.getPosition().x][node.getPosition().y]/avgDist[node.getType()];
+        return distance == -1 ? 0 : (extraResources/distance);
     }
 
     private boolean expensiveMultiplierBuildings() {
         int[] toBuild = {BuildingType.QUARRY.value, BuildingType.FARMERS_GUILD.value, BuildingType.LUMBER_MILL.value};
         TierResourceList maxQty = gameState.getPopulationTiers().get(bot.getCurrentTierLevel()).getTierMaxResources();
         for (int k : toBuild) {
-                if (getBuildingCost(k)[0] > maxQty.getWood() || getBuildingCost(k)[1] > maxQty.getStone() || getBuildingCost(k)[2] > maxQty.getGold())
-                    continue;
-                return true;
+            if (getBuildingCost(k)[0] <= maxQty.getWood() && getBuildingCost(k)[1] <= maxQty.getStone() && getBuildingCost(k)[2] <= maxQty.getGold())
+                return false;
         }
-        return false;
+        return true;
     }
 
     private int calculateCurrentScore() {
@@ -391,21 +374,33 @@ public class BotService {
     }
 
     private void updateDistanceMap() {
-        for (int i = 0; i < 40; i++) for (int j = 0; j < 40; j++) distanceMap[i][j] = -1;
+        for (int i = 0; i < 40; i++) for (int j = 0; j < 40; j++) {
+            distanceMap[i][j] = -1;
+            parentMap[i][j] = null;
+        }
         Queue<PathElement> queue = new LinkedList<>();
-        bot.getTerritory().forEach(node -> {
-            queue.add(new PathElement(null, new Position(node.getX(), node.getY()), 0));
+        startingSet.keySet().forEach(node -> {
+            Position pos = new Position(node.getX(), node.getY());
+            queue.add(new PathElement(pos, pos, 0));
             distanceMap[node.getX()][node.getY()] = 0;
+            parentMap[node.getX()][node.getY()] = null;
         });
         while (!queue.isEmpty()) {
             PathElement element = queue.poll();
-            for (Position node : getNeighbours(element.node, 1)) {
-                if (distanceMap[node.getX()][node.getY()] == -1) {
+            for (Position node : getNeighbours(element.node)) {
+                if (distanceMap[node.getX()][node.getY()] == -1 && (territoryMap[node.x][node.y] == null || (canCapture(node) && !territoryMap[node.x][node.y].equals(bot.getId())))) {
                     distanceMap[node.getX()][node.getY()] = element.depth + 1;
-                    queue.add(new PathElement(null, node, element.depth+1));
+                    parentMap[node.getX()][node.getY()] = element.parent;
+                    queue.add(new PathElement(element.node, node, element.depth+1));
                 }
             }
         }
+    }
+
+    private boolean canCapture(Position node) {
+        BotTerritory obj = territoryObjMap[node.x][node.y];
+        if (obj == null || !unitsToCaptureMemo.containsKey(obj.getNodeOnLand())) return false;
+        return unitsToCaptureMemo.get(obj.getNodeOnLand()) <= 0.1*(occupyingBuffer-botActions[ActionTypes.OCCUPY_LAND.value]);
     }
 
     private int unitsToCapture(BotTerritory terr) {
@@ -426,22 +421,38 @@ public class BotService {
     }
 
     private void fight() {
-        int extraSoldiers = (int)(Math.max(0, 0.2*averageK-botActions[ActionTypes.OCCUPY_LAND.value]));
-        extraSoldiers = Math.min(extraSoldiers, botActions[0]);
+        int extraSoldiers = occupyingBuffer-botActions[ActionTypes.OCCUPY_LAND.value];
+        extraSoldiers = Math.min(extraSoldiers, (int)(0.4*botActions[0]));
+        System.out.printf("FIGHT IDEAL: %8d, ASSIGNED: %8d, TRYING TO ASSIGN: %8d%n", occupyingBuffer, botActions[ActionTypes.OCCUPY_LAND.value], extraSoldiers);
+        List<GenericNode> nodes = gameState.getWorld().getMap().getNodes().stream()
+                .filter(node -> !(territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId())))
+                .sorted(Comparator.comparingDouble(node -> -resNodeScoreMemo.get(node.getId())))
+                .map(node -> availableNodeMap.get(trackToTerritory(node)))
+                .filter(node -> node != null && !currentlyOccupying.contains(node.getId()) && territoryOwner.get(node.getId()) != null && !territoryOwner.get(node.getId()).equals(bot.getId()))
+                .limit(1).collect(Collectors.toList());
+        for (GenericNode node : nodes) if (unitsToCaptureMemo.get(node.getId()) <= extraSoldiers) {
+            int newUnits = unitsToCaptureMemo.get(node.getId());
+            if (newUnits <= 0) continue;
+            commandList.add(new CommandAction(ActionTypes.OCCUPY_LAND.value, newUnits, node.getId()));
+            //System.out.printf("Sending %d units to fight at %s,%s%n", newUnits, terr.getX(), terr.getY());
+            extraSoldiers -= newUnits; unitsOccupying += newUnits;
+            botActions[0] -= newUnits; botActions[ActionTypes.OCCUPY_LAND.value] += newUnits;
+            if (extraSoldiers <= 0) break;
+        }
+
         List<BotTerritory> potential = borderNodes.stream()
                 .filter(terr -> unitsToCaptureMemo.get(terr.getNodeOnLand()) > 0)
                 .sorted(Comparator.comparingInt(terr -> unitsToCaptureMemo.get(terr.getNodeOnLand())))
                 .collect(Collectors.toList());
-        //System.out.println("EXTRA: " + extraSoldiers + ", BORDER: " + potential.size());
         for (BotTerritory terr : potential) if (unitsToCaptureMemo.get(terr.getNodeOnLand()) <= extraSoldiers) {
-            int newUnits = unitsToCapture(terr) - (myActions.containsKey(terr.getNodeOnLand()) ? nodeActions.get(terr.getNodeOnLand()).stream()
+            int newUnits = unitsToCaptureMemo.get(terr.getNodeOnLand()) - (myActions.containsKey(terr.getNodeOnLand()) ? nodeActions.get(terr.getNodeOnLand()).stream()
                     .filter(ac -> ac.getActionType() == ActionTypes.OCCUPY_LAND.value)
                     .mapToInt(PlayerAction::getNumberOfUnits)
                     .sum() : 0);
             if (newUnits <= 0) continue;
             commandList.add(new CommandAction(ActionTypes.OCCUPY_LAND.value, newUnits, terr.getNodeOnLand()));
             //System.out.printf("Sending %d units to fight at %s,%s%n", newUnits, terr.getX(), terr.getY());
-            extraSoldiers -= newUnits; BAD_UNITS += newUnits;
+            extraSoldiers -= newUnits; unitsOccupying += newUnits;
             botActions[0] -= newUnits; botActions[ActionTypes.OCCUPY_LAND.value] += newUnits;
             if (extraSoldiers <= 0) break;
         }
@@ -450,8 +461,20 @@ public class BotService {
     private void refreshStores() {
         Arrays.fill(botActions, 0);
         botActions[0] = bot.getAvailableUnits();
-        botActions[ActionTypes.OCCUPY_LAND.value] = BAD_UNITS;
-        bot.getActions().forEach(action -> botActions[action.getActionType()]+=action.getNumberOfUnits());
+        unitsOccupying = 0;
+        gameState.getBots().stream().filter(b -> b.getTerritory() != null).forEach(
+                b -> b.getTerritory().forEach(
+                        territory -> unitsOccupying +=
+                                territory.getOccupants().stream()
+                                        .filter(o -> o.getBotId().equals(bot.getId()))
+                                        .mapToInt(TerritoryOccupant::getCount).sum()));
+        botActions[ActionTypes.OCCUPY_LAND.value] = unitsOccupying;
+        occupyingBuffer = (int)(Math.max(botActions[ActionTypes.OCCUPY_LAND.value], 0.6*averageK));
+        bot.getActions().forEach(action -> {
+            botActions[action.getActionType()]+=action.getNumberOfUnits();
+            if (action.getActionType() == ActionTypes.OCCUPY_LAND.value) currentlyOccupying.add(action.getTargetNodeId());
+            else if (action.getActionType() >= 6 && action.getActionType() <= 10) currentlyBuilding.add(action.getTargetNodeId());
+        });
         nodeMap.clear();
         gameState.getWorld().getMap().getNodes().forEach(node -> nodeMap.put(node.getId(), node));
         availableNodeMap.clear();
@@ -461,25 +484,17 @@ public class BotService {
             resourceMap[i][j] = null;
             territoryMap[i][j] = null;
             freeNodes[i][j] = 0;
+            startingNodes[i][j] = null;
+            territoryObjMap[i][j] = null;
         }
         gameState.getBots().forEach(b -> b.getTerritory().forEach(territory -> {
             territoryOwner.put(territory.getNodeOnLand(), territory.getOwner());
             territoryMap[territory.getX()][territory.getY()] = territory.getOwner();
+            territoryObjMap[territory.getX()][territory.getY()] = territory;
         }));
         existingBuilding = new int[20];
         bot.getBuildings().forEach(node -> existingBuilding[node.getType()]++);
         gameState.getWorld().getMap().getNodes().forEach(node -> resourceMap[node.getPosition().x][node.getPosition().y] = node);
-        capturedNodes.clear();
-        bot.getBuildings().forEach(node -> {
-            for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
-                if (i == 0 && j == 0) continue;
-                if (node.getPosition().x+i < 0 || node.getPosition().x+i >= 40 || node.getPosition().y+j < 0 || node.getPosition().y+j >= 40) continue;
-                if (resourceMap[node.getPosition().x+i][node.getPosition().y+j] != null) {
-                    capturedNodes.add(resourceMap[node.getPosition().x+i][node.getPosition().y+j]);
-                }
-            }
-        });
-        updateDistanceMap();
         nodeActions.clear();
         gameState.getBots().stream().filter(b -> b.getActions() != null).forEach(b -> b.getActions()
                 .forEach(action -> {
@@ -492,21 +507,35 @@ public class BotService {
             myActions.get(action.getTargetNodeId()).add(action);
         });
         borderNodes.clear();
+        startingSet.clear();
         gameState.getBots().stream()
                 .filter(b -> b.getTerritory() != null && b.getId() != null && !b.getId().equals(bot.getId()))
                 .forEach(b -> b.getTerritory().forEach(territory -> {
                     if (territory.getOccupants().stream().anyMatch(o -> o.getBotId().equals(bot.getId()) && o.getCount() > 0)
-                            || getNeighbours(new Position(territory.getX(), territory.getY()), 1).stream()
+                            || getNeighbours(new Position(territory.getX(), territory.getY())).stream()
                             .anyMatch(n -> territoryMap[n.getX()][n.getY()] != null && territoryMap[n.getX()][n.getY()].equals(bot.getId()))) {
                         borderNodes.add(territory);
+                        startingNodes[territory.getX()][territory.getY()] = territory.getNodeOnLand();
                         unitsToCaptureMemo.put(territory.getNodeOnLand(), unitsToCapture(territory));
+                        startingSet.put(territory, false);
                     }
                 }));
+        bot.getTerritory().stream().filter(terr -> availableNodeMap.get(terr.getNodeOnLand()) != null).forEach(node -> {
+            startingNodes[node.getX()][node.getY()] = node.getNodeOnLand();
+            startingSet.put(node, true);
+        });
+        for (int i = 1; i <= 4; i++) avgDist[i] = 100;
+        gameState.getWorld().getMap().getNodes().stream()
+                .filter(node -> territoryOwner.get(node.getId()) == null || territoryOwner.get(node.getId()) != bot.getId())
+                .forEach(node -> avgDist[node.getType()] = Math.min(avgDist[node.getType()], getBaseDistance(node.getPosition())));
+        updateDistanceMap();
         gameState.getWorld().getMap().getScoutTowers().forEach(node -> territoryMap[node.getPosition().x][node.getPosition().y] = UUID.randomUUID());
         currentQty = new int[] {0, bot.getWood(), bot.getFood(), bot.getStone(), bot.getGold(), bot.getHeat()};
         gameState.getWorld().getMap().getAvailableNodes().stream()
                 .filter(node -> territoryOwner.get(node.getId()) != null && territoryOwner.get(node.getId()).equals(bot.getId()))
-                .forEach(node -> freeNodes[node.getPosition().x][node.getPosition().y] = (int)getNeighbours(node.getPosition(), 1).stream().filter(pos -> territoryMap[pos.x][pos.y] == null).count());
+                .forEach(node -> freeNodes[node.getPosition().x][node.getPosition().y] = (int)getNeighbours(node.getPosition()).stream().filter(pos -> territoryMap[pos.x][pos.y] == null).count());
+        resNodeScoreMemo.clear();
+        gameState.getWorld().getMap().getNodes().forEach(node -> resNodeScoreMemo.put(node.getId(), getNodeCompScore(node)));
     }
 
     public PlayerCommand computeNextPlayerAction() {
@@ -518,7 +547,7 @@ public class BotService {
         System.out.printf("CURRENT TICK: %4d, POPULATION: %8d, AVAILABLE: %8d%n", gameState.getWorld().getCurrentTick(), bot.getPopulation(), bot.getAvailableUnits());
         System.out.printf("FOOD: %8d, WOOD: %8d, STONE: %8d, GOLD: %8d, HEAT: %8d%n", bot.getFood(), bot.getWood(), bot.getStone(), bot.getGold(), bot.getHeat());
 
-        if (bot.getPopulation() >= 5 && getBuilders() < 1) build(expensiveMultiplierBuildings());
+        if (bot.getPopulation() >= 5 && getBuilders() < 1) build();
         if (botActions[0] >= 1 && botActions[ActionTypes.SCOUT.value] < 1 && !fullView) fullView = scout();
         fight();
         farm();
@@ -529,18 +558,18 @@ public class BotService {
         averageK += botActions[0]/50.0;
         receivedBotState = false;
         //System.out.printf("BOT ACTIONS %s%n", Arrays.toString(botActions));
-        System.out.printf("CURRENT SCORE: %8d, UNITS LEFT: %8d, DELTA T: %4d%n, AWAY: %d, TERR: %2d %% %n", calculateCurrentScore(), botActions[0], System.currentTimeMillis()-time, botActions[ActionTypes.OCCUPY_LAND.value], (int)(100*bot.getTerritory().size()/1600.0));
+        System.out.printf("CURRENT SCORE: %8d, UNITS LEFT: %8d, DELTA T: %4d, AWAY: %d, TERR: %2d %% %n", calculateCurrentScore(), botActions[0], System.currentTimeMillis()-time, botActions[ActionTypes.OCCUPY_LAND.value], (int)(100*bot.getTerritory().size()/1600.0));
         commandCount++;
         return new PlayerCommand(bot.getId(), commandList);
     }
 
     private static class PathElement {
-        public GenericNode firstNode;
+        public Position parent;
         public Position node;
         public int depth;
 
-        public PathElement(GenericNode firstNode, Position node, int depth) {
-            this.firstNode = firstNode;
+        public PathElement(Position parent, Position node, int depth) {
+            this.parent = parent;
             this.node = node;
             this.depth = depth;
         }
